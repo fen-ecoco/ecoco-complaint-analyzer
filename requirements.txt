@@ -1,0 +1,12 @@
+streamlit>=1.35.0
+pandas
+plotly
+openpyxl
+python-pptx
+pdfplumber
+openai
+gspread
+google-auth
+matplotlib
+reportlab
+fpdf2
