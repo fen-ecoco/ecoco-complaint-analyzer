@@ -647,83 +647,102 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
 
 
 def to_pdf_bytes(df: pd.DataFrame) -> bytes:
-    """Generate PDF using reportlab for proper CJK text wrapping in cells."""
-    try:
-        from reportlab.lib.pagesizes import A4, landscape
-        from reportlab.lib import colors
-        from reportlab.lib.styles import getSampleStyleSheet
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-        from reportlab.lib.units import mm
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-        pdfmetrics.registerFont(UnicodeCIDFont('HeiseiMin-W3'))
-        BASE_FONT = 'HeiseiMin-W3'
-    except Exception:
-        BASE_FONT = 'Helvetica'
-        from reportlab.lib.pagesizes import A4, landscape
-        from reportlab.lib import colors
-        from reportlab.lib.styles import getSampleStyleSheet
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-        from reportlab.lib.units import mm
+    """Generate PDF using fpdf2 + Noto CJK TTF for proper Traditional Chinese support."""
+    from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
+    import os
 
-    buf = io.BytesIO()
-    page_w, page_h = landscape(A4)
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
-                            leftMargin=10*mm, rightMargin=10*mm,
-                            topMargin=10*mm, bottomMargin=10*mm)
+    # ── 找字型（優先順序：系統 NotoSansCJK → 備選路徑）
+    CJK_FONT_CANDIDATES = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Medium.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJKtc-Regular.otf",
+        "/usr/share/fonts/truetype/arphic/uming.ttc",
+    ]
+    font_path = next((p for p in CJK_FONT_CANDIDATES if os.path.exists(p)), None)
 
-    styles = getSampleStyleSheet()
-    cell_style = styles['Normal'].clone('cell')
-    cell_style.fontSize = 7
-    cell_style.fontName = BASE_FONT
-    cell_style.wordWrap = 'CJK'
-    cell_style.leading = 10
+    table_df = df.copy()
+    drop_cols = [c for c in ["選取"] if c in table_df.columns]
+    table_df = table_df.drop(columns=drop_cols).fillna("")
 
-    header_style = styles['Normal'].clone('hdr')
-    header_style.fontSize = 7
-    header_style.fontName = BASE_FONT
-    header_style.textColor = colors.white
-    header_style.wordWrap = 'CJK'
+    # ── 欄寬設定（A4 橫向 = 297mm 可用約 277mm）
+    # 依欄位名稱給較寬空間
+    PAGE_W_MM = 277.0
+    WIDE_COLS  = {"用戶內容", "主旨", "問題主旨"}
+    MEDIUM_COLS = {"問題細項", "問題類型"}
 
-    table_df = df.head(50).copy()
-    # Drop internal helper columns
-    drop_cols = [c for c in ['選取'] if c in table_df.columns]
-    table_df = table_df.drop(columns=drop_cols).fillna('')
-
-    WRAP_COLS = {'用戶內容', '主旨', '問題主旨'}
-    COL_W_MAP = {}  # col_name -> width in mm
     num_cols = len(table_df.columns)
-    base_w = (page_w - 20*mm) / num_cols
+    # 分配欄寬
+    wide_count   = sum(1 for c in table_df.columns if c in WIDE_COLS)
+    medium_count = sum(1 for c in table_df.columns if c in MEDIUM_COLS)
+    narrow_count = num_cols - wide_count - medium_count
+    if wide_count + medium_count + narrow_count == 0:
+        col_widths = {c: PAGE_W_MM / num_cols for c in table_df.columns}
+    else:
+        unit = PAGE_W_MM / max(wide_count*4 + medium_count*2 + narrow_count, 1)
+        col_widths = {}
+        for c in table_df.columns:
+            if c in WIDE_COLS:
+                col_widths[c] = unit * 4
+            elif c in MEDIUM_COLS:
+                col_widths[c] = unit * 2
+            else:
+                col_widths[c] = unit
 
-    def make_cell(val, is_header=False):
-        s = str(val)
-        st = header_style if is_header else cell_style
-        return Paragraph(s, st)
+    pdf = FPDF(orientation="L", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=10)
+    pdf.add_page()
 
-    data = [[make_cell(c, True) for c in table_df.columns]]
-    for _, row in table_df.iterrows():
-        data.append([make_cell(str(v)) for v in row.values])
+    if font_path:
+        pdf.add_font("CJK", style="", fname=font_path)
+        FONT = "CJK"
+    else:
+        FONT = "Helvetica"
 
-    col_widths = [base_w] * num_cols
+    ROW_H   = 7.0
+    HDR_H   = 8.0
+    FS_HDR  = 8
+    FS_CELL = 7
 
-    t = Table(data, colWidths=col_widths, repeatRows=1)
-    t.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#3E75A0')),
-        ('TEXTCOLOR',  (0,0), (-1,0), colors.white),
-        ('FONTNAME',   (0,0), (-1,-1), BASE_FONT),
-        ('FONTSIZE',   (0,0), (-1,-1), 7),
-        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#EBF4FA')]),
-        ('GRID',       (0,0), (-1,-1), 0.4, colors.HexColor('#CCCCCC')),
-        ('VALIGN',     (0,0), (-1,-1), 'TOP'),
-        ('LEFTPADDING',(0,0), (-1,-1), 3),
-        ('RIGHTPADDING',(0,0),(-1,-1), 3),
-        ('TOPPADDING', (0,0), (-1,-1), 2),
-        ('BOTTOMPADDING',(0,0),(-1,-1), 2),
-    ]))
+    # ── 表頭
+    pdf.set_fill_color(0x06, 0x0E, 0x9F)   # ECOCO 藍
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font(FONT, size=FS_HDR)
+    for col in table_df.columns:
+        w = col_widths[col]
+        pdf.cell(w, HDR_H, col, border=1, fill=True,
+                 new_x=XPos.RIGHT, new_y=YPos.TOP, align="C")
+    pdf.ln(HDR_H)
 
-    elements = [t]
-    doc.build(elements)
-    return buf.getvalue()
+    # ── 資料列
+    pdf.set_font(FONT, size=FS_CELL)
+    for i, (_, row) in enumerate(table_df.iterrows()):
+        if i % 2 == 0:
+            pdf.set_fill_color(0xEB, 0xF4, 0xFA)
+        else:
+            pdf.set_fill_color(255, 255, 255)
+        pdf.set_text_color(0x22, 0x22, 0x22)
+        for col in table_df.columns:
+            val = str(row[col])
+            w = col_widths[col]
+            # 長文字截短避免溢出
+            if col in WIDE_COLS and len(val) > 28:
+                val = val[:26] + "…"
+            elif len(val) > 14:
+                val = val[:13] + "…"
+            pdf.cell(w, ROW_H, val, border=1, fill=True,
+                     new_x=XPos.RIGHT, new_y=YPos.TOP, align="L")
+        pdf.ln(ROW_H)
+
+    # ── 頁尾
+    pdf.set_y(-12)
+    pdf.set_font(FONT, size=6)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(0, 6,
+             f"ECOCO 客訴分析報告  共 {len(table_df)} 筆  產出日期：{datetime.now().strftime('%Y/%m/%d')}",
+             align="C")
+
+    return bytes(pdf.output())
 
 
 def _setup_cjk_font() -> None:
@@ -788,7 +807,7 @@ def build_chart_pack(df: pd.DataFrame) -> dict[str, bytes]:
     fig1.savefig(b1, format="png", dpi=180)
     plt.close(fig1)
 
-    # 2) machine ratio pie
+    # 2) machine ratio pie  ── #060E9F（主色）+ #FF5000（次色）
     fig2, ax2 = plt.subplots(figsize=(6.2, 4.5))
     df_machine = data[data["問題類型"] == "機台問題類型"].copy()
     if df_machine.empty:
@@ -803,17 +822,21 @@ def build_chart_pack(df: pd.DataFrame) -> dict[str, bytes]:
             return "收瓶機"
         df_machine["機台機型"] = df_machine.apply(get_machine_type, axis=1)
         pie_stats = df_machine["機台機型"].value_counts()
-        ax2.pie(pie_stats.values, labels=pie_stats.index, autopct="%1.1f%%", colors=["#0076A9", "#8EB9C9", "#FAE0B8"])
+        # 依類別數量動態分配顏色：第一名 #060E9F、第二名 #FF5000、其餘漸層
+        PIE_COLORS = ["#060E9F", "#FF5000", "#8EB9C9", "#FAE0B8", "#FFCE00"]
+        pie_colors = PIE_COLORS[:len(pie_stats)]
+        ax2.pie(pie_stats.values, labels=pie_stats.index, autopct="%1.1f%%",
+                colors=pie_colors)
         ax2.set_title("機台問題類型分布")
     fig2.tight_layout()
     b2 = io.BytesIO()
     fig2.savefig(b2, format="png", dpi=180)
     plt.close(fig2)
 
-    # 3) top detail horizontal bar
+    # 3) top detail horizontal bar  ── 全部使用 #060E9F
     fig3, ax3 = plt.subplots(figsize=(8, 4.5))
     d = detail_stats.sort_values("件數", ascending=True)
-    ax3.barh(d["問題細項"], d["件數"], color="#1f77b4")
+    ax3.barh(d["問題細項"], d["件數"], color="#060E9F")
     ax3.set_title("十大問題細項分布")
     ax3.set_xlabel("件數")
     fig3.tight_layout()
@@ -834,9 +857,11 @@ def build_chart_pack(df: pd.DataFrame) -> dict[str, bytes]:
         a2.text(0.5, 0.5, "無機台資料", ha="center", va="center")
     else:
         pie_stats = df_machine["機台機型"].value_counts()
-        a2.pie(pie_stats.values, labels=pie_stats.index, autopct="%1.1f%%")
+        PIE_COLORS = ["#060E9F", "#FF5000", "#8EB9C9", "#FAE0B8", "#FFCE00"]
+        a2.pie(pie_stats.values, labels=pie_stats.index, autopct="%1.1f%%",
+               colors=PIE_COLORS[:len(pie_stats)])
         a2.set_title("機台問題占比")
-    a3.barh(d["問題細項"], d["件數"], color="#1f77b4")
+    a3.barh(d["問題細項"], d["件數"], color="#060E9F")
     a3.set_title("十大細項")
     fig4.tight_layout()
     b4 = io.BytesIO()
@@ -937,27 +962,50 @@ def build_ppt_bytes(stats: pd.DataFrame, ai_text: str, source_name: str,
     if use_template:
         slides = list(prs.slides)
 
-        # --- 封面 ---
+        # --- 封面 (slide 0) ---
+        # 範本版面：左側藍色面板（版面配置提供），右側三個文字框：
+        #   Shape;99  → 主標題「營運周報」 (l≈5.66, t≈2.18)
+        #   Shape;98  → 日期/資料列 (l≈6.14, t≈3.48)
+        #   Shape;96  → 公司名藍底白字 (l≈6.67, t≈5.04)
         s0 = slides[0]
         for sp in s0.shapes:
-            if sp.has_text_frame:
-                txt = sp.text_frame.text
-                if "報告日期" in txt or "報告資料" in txt:
-                    tf = sp.text_frame; tf.clear()
-                    for line, val in [
-                        ("報告日期", datetime.now().strftime("%Y/%m/%d")),
-                        ("報告資料", source_name),
-                    ]:
-                        p = tf.add_paragraph() if tf.paragraphs else tf.paragraphs[0]
-                        p.text = f"{line}:{val}"
-                        for run in p.runs:
-                            run.font.name = FONT
-                elif "周報" in txt or "簡報" in txt:
-                    tf = sp.text_frame; tf.clear()
-                    p = tf.paragraphs[0]
-                    p.text = "客訴分析簡報"
-                    for run in p.runs:
-                        run.font.name = FONT
+            if not sp.has_text_frame:
+                continue
+            l_in = sp.left / 914400
+            t_in = sp.top  / 914400
+            raw  = sp.text_frame.text.strip()
+
+            # ── 主標題（在 x>5" 且 y<3"）
+            if l_in > 5.0 and t_in < 3.0:
+                tf = sp.text_frame
+                tf.clear()
+                p = tf.paragraphs[0]
+                run = p.add_run()
+                run.text = "客訴分析簡報"
+                run.font.name  = FONT
+                run.font.bold  = True
+                run.font.size  = Pt(32)
+                run.font.color.rgb = RGBColor(0x16, 0x2B, 0x7E)
+
+            # ── 日期/資料欄（在 x>5" 且 y 在 3~5"）
+            elif l_in > 5.0 and 3.0 <= t_in < 5.0:
+                tf = sp.text_frame
+                tf.clear()
+                for label, val in [
+                    ("報告日期", datetime.now().strftime("%Y/%m/%d")),
+                    ("報告資料", source_name),
+                ]:
+                    p = tf.add_paragraph()
+                    run = p.add_run()
+                    run.text = f"{label}:{val}"
+                    run.font.name  = FONT
+                    run.font.bold  = True
+                    run.font.size  = Pt(18)
+                    run.font.color.rgb = RGBColor(0x1A, 0x2A, 0x7F)
+
+            # ── 公司名（在 x>6" 且 y>=5" 或有填色藍底）
+            elif l_in > 6.0 and t_in >= 4.8:
+                pass   # 保留原樣「凡立橙股份有限公司」
 
         def _fill_slide(slide, title_txt, chart_key_list, add_table=True):
             # 更新標題
