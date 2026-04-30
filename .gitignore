@@ -1,0 +1,6 @@
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+*.pyo
+history_reports/
+tmp_verify/
