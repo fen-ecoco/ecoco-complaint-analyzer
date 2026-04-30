@@ -120,6 +120,37 @@ DEPT_MAP = {
     "顧客關係類型": "營運部",
 }
 
+# ── ECOCO 品牌色（Pantone 對應）──────────────────────────────
+BRAND_ORANGE  = "#FF5000"   # Pantone Orange 021 C  → 營運部
+BRAND_BLUE    = "#060E9F"   # Pantone Blue 072 C    → 資訊部 / 主圖色
+BRAND_YELLOW  = "#FFCE00"   # Pantone 116 C         → 行銷部
+BRAND_LBLUE   = "#8EB9C9"   # Pantone 550 C
+BRAND_BEIGE   = "#FAE0B8"   # Pantone P17-2 C
+BRAND_TEAL    = "#0076A9"   # Pantone 7690 C
+BRAND_WHITE   = "#FFFFFF"   # Pantone White C
+
+# 部門固定色（Plotly color_discrete_map 用）
+DEPT_COLOR_MAP: dict[str, str] = {
+    "營運部": BRAND_ORANGE,
+    "行銷部": BRAND_YELLOW,
+    "資訊部": BRAND_BLUE,
+    "研發部": BRAND_TEAL,
+    "廠務部": BRAND_LBLUE,
+    "人資部": BRAND_BEIGE,
+    "企劃部": "#A0C878",
+    "財務部": "#C8A0E0",
+    "開發部": "#E0C8A0",
+    "總經理室": "#A0E0C8",
+    "未分配":  "#CCCCCC",
+    "":        "#CCCCCC",
+}
+
+# 圓餅圖 / 橫條圖單色排序
+BRAND_PALETTE = [
+    BRAND_BLUE, BRAND_ORANGE, BRAND_YELLOW,
+    BRAND_LBLUE, BRAND_BEIGE, BRAND_TEAL,
+]
+
 HISTORY_DIR = Path("history_reports")
 HISTORY_DIR.mkdir(exist_ok=True)
 META_FILE = HISTORY_DIR / "history.json"
@@ -793,21 +824,23 @@ def build_chart_pack(df: pd.DataFrame) -> dict[str, bytes]:
     detail_stats = data["問題細項"].value_counts().reset_index().head(10)
     detail_stats.columns = ["問題細項", "件數"]
 
-    # 1) type distribution
+    # 1) type distribution bar — 依部門固定色
     fig1, ax1 = plt.subplots(figsize=(8, 4.5))
-    colors = ["#FF5000", "#060E9F", "#FFCE00", "#8EB9C9", "#0076A9", "#FAE0B8"]
-    ax1.bar(stats["問題類型"], stats["件數"], color=colors[: len(stats)])
+    bar_colors = [DEPT_COLOR_MAP.get(
+        DEPT_MAP.get(t, ""), BRAND_ORANGE) for t in stats["問題類型"]]
+    ax1.bar(stats["問題類型"], stats["件數"], color=bar_colors)
     ax1.set_title("問題類型分布")
     ax1.set_ylabel("件數")
+    ax1.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
     ax1.tick_params(axis="x", rotation=20)
     for i, r in stats.iterrows():
-        ax1.text(i, r["件數"], f'{r["百分比"]:.1f}%', ha="center", va="bottom", fontsize=9)
+        ax1.text(i, r["件數"], f'{int(r["百分比"])}%', ha="center", va="bottom", fontsize=9)
     fig1.tight_layout()
     b1 = io.BytesIO()
     fig1.savefig(b1, format="png", dpi=180)
     plt.close(fig1)
 
-    # 2) machine ratio pie  ── #060E9F（主色）+ #FF5000（次色）
+    # 2) machine ratio pie  ── 品牌色 BRAND_PALETTE
     fig2, ax2 = plt.subplots(figsize=(6.2, 4.5))
     df_machine = data[data["問題類型"] == "機台問題類型"].copy()
     if df_machine.empty:
@@ -815,30 +848,32 @@ def build_chart_pack(df: pd.DataFrame) -> dict[str, bytes]:
     else:
         def get_machine_type(row):
             txt = str(row.get("用戶內容", "")) + " " + str(row.get("主旨", ""))
-            if "方舟" in txt:
-                return "方舟站"
-            if "電池" in txt:
-                return "電池機"
+            if "方舟" in txt: return "方舟站"
+            if "電池" in txt: return "電池機"
             return "收瓶機"
         df_machine["機台機型"] = df_machine.apply(get_machine_type, axis=1)
         pie_stats = df_machine["機台機型"].value_counts()
-        # 依類別數量動態分配顏色：第一名 #060E9F、第二名 #FF5000、其餘漸層
-        PIE_COLORS = ["#060E9F", "#FF5000", "#8EB9C9", "#FAE0B8", "#FFCE00"]
-        pie_colors = PIE_COLORS[:len(pie_stats)]
-        ax2.pie(pie_stats.values, labels=pie_stats.index, autopct="%1.1f%%",
-                colors=pie_colors)
+        pie_colors = BRAND_PALETTE[:len(pie_stats)]
+        wedges, texts, autotexts = ax2.pie(
+            pie_stats.values, labels=pie_stats.index,
+            autopct="%1.1f%%", colors=pie_colors,
+            wedgeprops=dict(linewidth=1.5, edgecolor="white"),
+        )
+        for at in autotexts:
+            at.set_fontsize(10)
         ax2.set_title("機台問題類型分布")
     fig2.tight_layout()
     b2 = io.BytesIO()
     fig2.savefig(b2, format="png", dpi=180)
     plt.close(fig2)
 
-    # 3) top detail horizontal bar  ── 全部使用 #060E9F
+    # 3) top detail horizontal bar  ── 全部使用品牌主藍 BRAND_BLUE
     fig3, ax3 = plt.subplots(figsize=(8, 4.5))
     d = detail_stats.sort_values("件數", ascending=True)
-    ax3.barh(d["問題細項"], d["件數"], color="#060E9F")
+    ax3.barh(d["問題細項"], d["件數"], color=BRAND_BLUE)
     ax3.set_title("十大問題細項分布")
     ax3.set_xlabel("件數")
+    ax3.xaxis.set_major_locator(plt.MaxNLocator(integer=True))  # 整數刻度
     fig3.tight_layout()
     b3 = io.BytesIO()
     fig3.savefig(b3, format="png", dpi=180)
@@ -850,18 +885,20 @@ def build_chart_pack(df: pd.DataFrame) -> dict[str, bytes]:
     a1 = fig4.add_subplot(gs[0, 0])
     a2 = fig4.add_subplot(gs[0, 1])
     a3 = fig4.add_subplot(gs[0, 2])
-    a1.bar(stats["問題類型"], stats["件數"], color=colors[: len(stats)])
+    a1.bar(stats["問題類型"], stats["件數"], color=bar_colors)
     a1.set_title("問題類型分布")
+    a1.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
     a1.tick_params(axis="x", rotation=18)
     if df_machine.empty:
         a2.text(0.5, 0.5, "無機台資料", ha="center", va="center")
     else:
-        pie_stats = df_machine["機台機型"].value_counts()
-        PIE_COLORS = ["#060E9F", "#FF5000", "#8EB9C9", "#FAE0B8", "#FFCE00"]
-        a2.pie(pie_stats.values, labels=pie_stats.index, autopct="%1.1f%%",
-               colors=PIE_COLORS[:len(pie_stats)])
+        pie_stats2 = df_machine["機台機型"].value_counts()
+        a2.pie(pie_stats2.values, labels=pie_stats2.index, autopct="%1.1f%%",
+               colors=BRAND_PALETTE[:len(pie_stats2)],
+               wedgeprops=dict(linewidth=1.5, edgecolor="white"))
         a2.set_title("機台問題占比")
-    a3.barh(d["問題細項"], d["件數"], color="#060E9F")
+    a3.barh(d["問題細項"], d["件數"], color=BRAND_BLUE)
+    a3.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     a3.set_title("十大細項")
     fig4.tight_layout()
     b4 = io.BytesIO()
@@ -1534,19 +1571,16 @@ def render_charts_from_stats(stats: pd.DataFrame, df: pd.DataFrame, key_prefix: 
     """Render charts. stats may be manually edited in section_2."""
     c1, c2, c3 = st.columns(3)
 
-    # ── 問題類型分布 bar（部門色）
+    # ── 問題類型分布 bar（部門固定色）
     fig1 = px.bar(
         stats, x="問題類型", y="件數", color="歸屬部門", text="百分比", title="問題類型分布",
-        color_discrete_sequence=["#FF5000", "#060E9F", "#FFCE00", "#8EB9C9", "#0076A9", "#FAE0B8"]
+        color_discrete_map=DEPT_COLOR_MAP,
     )
     fig1.update_traces(texttemplate="%{text}%", textposition="outside")
-    fig1.update_layout(
-        height=400,
-        yaxis=dict(dtick=1, tickformat="d"),  # 整數刻度
-    )
+    fig1.update_layout(height=400, yaxis=dict(dtick=1, tickformat="d"))
     c1.plotly_chart(fig1, use_container_width=True, key=f"{key_prefix}_fig1" if key_prefix else None)
 
-    # ── 機台問題細分比較 pie（#060E9F 主 + #FF5000 次）
+    # ── 機台問題細分比較 pie（品牌色 BRAND_PALETTE，依件數排序）
     df_machine = df[df["問題類型"] == "機台問題類型"].copy()
     if not df_machine.empty:
         def get_machine_type(row):
@@ -1557,36 +1591,32 @@ def render_charts_from_stats(stats: pd.DataFrame, df: pd.DataFrame, key_prefix: 
         df_machine["機台機型"] = df_machine.apply(get_machine_type, axis=1)
         m_stats = df_machine["機台機型"].value_counts().reset_index()
         m_stats.columns = ["機型", "件數"]
-        # 依件數排序，第一名 #060E9F，第二名 #FF5000，其餘漸層
-        PIE_PALETTE = ["#060E9F", "#FF5000", "#8EB9C9", "#FAE0B8", "#FFCE00"]
-        color_map = {row["機型"]: PIE_PALETTE[i] for i, row in m_stats.iterrows()}
+        color_map = {row["機型"]: BRAND_PALETTE[i % len(BRAND_PALETTE)]
+                     for i, row in m_stats.iterrows()}
         fig2 = px.pie(
             m_stats, names="機型", values="件數",
             title="機台問題細分比較", hole=0.3,
             color="機型", color_discrete_map=color_map,
         )
-        fig2.update_traces(
-            texttemplate="%{percent:.1%}",
-            textinfo="percent+label",
-        )
+        fig2.update_traces(texttemplate="%{percent:.1%}", textinfo="percent+label")
         fig2.update_layout(height=400, margin=dict(t=40, b=0, l=0, r=0))
         c2.plotly_chart(fig2, use_container_width=True, key=f"{key_prefix}_fig2" if key_prefix else None)
     else:
         c2.info("無機台相關數據")
 
-    # ── 十大問題細項分布 horizontal bar（全部 #060E9F，整數 x 軸）
+    # ── 十大問題細項分布 horizontal bar（全部品牌主藍 BRAND_BLUE）
     detail_stats = df["問題細項"].value_counts().reset_index().head(10)
     detail_stats.columns = ["問題細項", "件數"]
     fig3 = px.bar(
         detail_stats, x="件數", y="問題細項",
         orientation="h", title="十大問題細項分布",
-        color_discrete_sequence=["#060E9F"],
+        color_discrete_sequence=[BRAND_BLUE],
     )
-    fig3.update_traces(marker_color="#060E9F")
+    fig3.update_traces(marker_color=BRAND_BLUE)
     fig3.update_layout(
         height=400,
         yaxis={"categoryorder": "total ascending"},
-        xaxis=dict(dtick=1, tickformat="d"),   # 整數刻度，無小數
+        xaxis=dict(dtick=1, tickformat="d"),
         margin=dict(t=40, b=0, l=0, r=0),
     )
     c3.plotly_chart(fig3, use_container_width=True, key=f"{key_prefix}_fig3" if key_prefix else None)
@@ -1634,8 +1664,8 @@ def render_charts(df: pd.DataFrame, key_prefix: str = ""):
         df_machine["機台機型"] = df_machine.apply(get_machine_type, axis=1)
         m_stats = df_machine["機台機型"].value_counts().reset_index()
         m_stats.columns = ["機型", "件數"]
-        PIE_PALETTE = ["#060E9F", "#FF5000", "#8EB9C9", "#FAE0B8", "#FFCE00"]
-        color_map = {row["機型"]: PIE_PALETTE[i] for i, row in m_stats.iterrows()}
+        color_map = {row["機型"]: BRAND_PALETTE[i % len(BRAND_PALETTE)]
+                     for i, row in m_stats.iterrows()}
         fig2 = px.pie(
             m_stats, names="機型", values="件數",
             title="機台問題細分比較", hole=0.3,
@@ -1652,9 +1682,9 @@ def render_charts(df: pd.DataFrame, key_prefix: str = ""):
     fig3 = px.bar(
         detail_stats, x="件數", y="問題細項",
         orientation="h", title="十大問題細項分布",
-        color_discrete_sequence=["#060E9F"],
+        color_discrete_sequence=[BRAND_BLUE],
     )
-    fig3.update_traces(marker_color="#060E9F")
+    fig3.update_traces(marker_color=BRAND_BLUE)
     fig3.update_layout(
         height=400,
         yaxis={"categoryorder": "total ascending"},
