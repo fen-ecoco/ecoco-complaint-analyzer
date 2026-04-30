@@ -1533,15 +1533,20 @@ def section_1():
 def render_charts_from_stats(stats: pd.DataFrame, df: pd.DataFrame, key_prefix: str = ""):
     """Render charts. stats may be manually edited in section_2."""
     c1, c2, c3 = st.columns(3)
-    
+
+    # ── 問題類型分布 bar（部門色）
     fig1 = px.bar(
         stats, x="問題類型", y="件數", color="歸屬部門", text="百分比", title="問題類型分布",
         color_discrete_sequence=["#FF5000", "#060E9F", "#FFCE00", "#8EB9C9", "#0076A9", "#FAE0B8"]
     )
     fig1.update_traces(texttemplate="%{text}%", textposition="outside")
-    fig1.update_layout(height=400)
+    fig1.update_layout(
+        height=400,
+        yaxis=dict(dtick=1, tickformat="d"),  # 整數刻度
+    )
     c1.plotly_chart(fig1, use_container_width=True, key=f"{key_prefix}_fig1" if key_prefix else None)
 
+    # ── 機台問題細分比較 pie（#060E9F 主 + #FF5000 次）
     df_machine = df[df["問題類型"] == "機台問題類型"].copy()
     if not df_machine.empty:
         def get_machine_type(row):
@@ -1552,16 +1557,38 @@ def render_charts_from_stats(stats: pd.DataFrame, df: pd.DataFrame, key_prefix: 
         df_machine["機台機型"] = df_machine.apply(get_machine_type, axis=1)
         m_stats = df_machine["機台機型"].value_counts().reset_index()
         m_stats.columns = ["機型", "件數"]
-        fig2 = px.pie(m_stats, names="機型", values="件數", title="機台問題細分比較", hole=0.3)
+        # 依件數排序，第一名 #060E9F，第二名 #FF5000，其餘漸層
+        PIE_PALETTE = ["#060E9F", "#FF5000", "#8EB9C9", "#FAE0B8", "#FFCE00"]
+        color_map = {row["機型"]: PIE_PALETTE[i] for i, row in m_stats.iterrows()}
+        fig2 = px.pie(
+            m_stats, names="機型", values="件數",
+            title="機台問題細分比較", hole=0.3,
+            color="機型", color_discrete_map=color_map,
+        )
+        fig2.update_traces(
+            texttemplate="%{percent:.1%}",
+            textinfo="percent+label",
+        )
         fig2.update_layout(height=400, margin=dict(t=40, b=0, l=0, r=0))
         c2.plotly_chart(fig2, use_container_width=True, key=f"{key_prefix}_fig2" if key_prefix else None)
     else:
         c2.info("無機台相關數據")
 
+    # ── 十大問題細項分布 horizontal bar（全部 #060E9F，整數 x 軸）
     detail_stats = df["問題細項"].value_counts().reset_index().head(10)
     detail_stats.columns = ["問題細項", "件數"]
-    fig3 = px.bar(detail_stats, x="件數", y="問題細項", orientation='h', title="十大問題細項分佈")
-    fig3.update_layout(height=400, yaxis={'categoryorder':'total ascending'}, margin=dict(t=40, b=0, l=0, r=0))
+    fig3 = px.bar(
+        detail_stats, x="件數", y="問題細項",
+        orientation="h", title="十大問題細項分布",
+        color_discrete_sequence=["#060E9F"],
+    )
+    fig3.update_traces(marker_color="#060E9F")
+    fig3.update_layout(
+        height=400,
+        yaxis={"categoryorder": "total ascending"},
+        xaxis=dict(dtick=1, tickformat="d"),   # 整數刻度，無小數
+        margin=dict(t=40, b=0, l=0, r=0),
+    )
     c3.plotly_chart(fig3, use_container_width=True, key=f"{key_prefix}_fig3" if key_prefix else None)
 
 
@@ -1607,7 +1634,14 @@ def render_charts(df: pd.DataFrame, key_prefix: str = ""):
         df_machine["機台機型"] = df_machine.apply(get_machine_type, axis=1)
         m_stats = df_machine["機台機型"].value_counts().reset_index()
         m_stats.columns = ["機型", "件數"]
-        fig2 = px.pie(m_stats, names="機型", values="件數", title="機台問題細分比較", hole=0.3)
+        PIE_PALETTE = ["#060E9F", "#FF5000", "#8EB9C9", "#FAE0B8", "#FFCE00"]
+        color_map = {row["機型"]: PIE_PALETTE[i] for i, row in m_stats.iterrows()}
+        fig2 = px.pie(
+            m_stats, names="機型", values="件數",
+            title="機台問題細分比較", hole=0.3,
+            color="機型", color_discrete_map=color_map,
+        )
+        fig2.update_traces(texttemplate="%{percent:.1%}", textinfo="percent+label")
         fig2.update_layout(height=400, margin=dict(t=40, b=0, l=0, r=0))
         c2.plotly_chart(fig2, use_container_width=True, key=f"{key_prefix}_fig2" if key_prefix else None)
     else:
@@ -1615,8 +1649,18 @@ def render_charts(df: pd.DataFrame, key_prefix: str = ""):
 
     detail_stats = df["問題細項"].value_counts().reset_index().head(10)
     detail_stats.columns = ["問題細項", "件數"]
-    fig3 = px.bar(detail_stats, x="件數", y="問題細項", orientation='h', title="十大問題細項分佈")
-    fig3.update_layout(height=400, yaxis={'categoryorder':'total ascending'}, margin=dict(t=40, b=0, l=0, r=0))
+    fig3 = px.bar(
+        detail_stats, x="件數", y="問題細項",
+        orientation="h", title="十大問題細項分布",
+        color_discrete_sequence=["#060E9F"],
+    )
+    fig3.update_traces(marker_color="#060E9F")
+    fig3.update_layout(
+        height=400,
+        yaxis={"categoryorder": "total ascending"},
+        xaxis=dict(dtick=1, tickformat="d"),
+        margin=dict(t=40, b=0, l=0, r=0),
+    )
     c3.plotly_chart(fig3, use_container_width=True, key=f"{key_prefix}_fig3" if key_prefix else None)
 
 
@@ -1633,6 +1677,7 @@ def section_2():
     # --- Date range filter ---
     date_cols = [c for c in df_full.columns if "日期" in c or "date" in c.lower()]
     df = df_full.copy()
+    start_d = end_d = None
     if date_cols:
         dcol = date_cols[0]
         try:
@@ -1649,6 +1694,12 @@ def section_2():
                 st.caption(f"目前顯示 {len(df)} 筆 / 共 {len(df_full)} 筆")
         except Exception:
             pass
+
+    # 組合 source_name = 日期區間（用於 PPT 封面）
+    if start_d and end_d:
+        ppt_source = f"{start_d.strftime('%Y/%m/%d')}～{end_d.strftime('%Y/%m/%d')}"
+    else:
+        ppt_source = st.session_state.get("source_name", "unknown")
 
     stats = df["問題類型"].value_counts().rename_axis("問題類型").reset_index(name="件數")
     stats["百分比"] = (stats["件數"] / max(stats["件數"].sum(), 1) * 100).round(0).astype(int)
@@ -1713,9 +1764,11 @@ def section_2():
         file_name=f"{datetime.now().strftime('%Y%m%d')}_圖表圖檔.zip",
         mime="application/zip",
     )
+    # PPT：使用畫面篩選後的 stats（不含合計列）+ 日期區間作為封面標題
     ppt_bytes = build_ppt_bytes(
-        stats_with_total, ai_text,
-        st.session_state.get("source_name", "unknown"),
+        chart_stats,          # 畫面上的純資料列（無合計列）
+        ai_text,
+        ppt_source,           # 封面顯示日期區間
         chart_pack=chart_pack,
     )
     st.download_button(
