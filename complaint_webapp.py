@@ -527,10 +527,18 @@ def analyze_dataframe(df: pd.DataFrame, cfg: AnalysisConfig) -> pd.DataFrame:
 #   [google_credentials]   ← service account JSON 欄位
 
 def _get_gsheet_client():
+    """從環境變數或 st.secrets 取得 gspread client。"""
     if gspread is None or Credentials is None:
         return None
     try:
-        creds_dict = dict(st.secrets.get("google_credentials", {}))
+        import os, json as _json
+        # ── 優先讀環境變數（Render 部署用）──
+        creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
+        if creds_json:
+            creds_dict = _json.loads(creds_json)
+        else:
+            # 備用：本機 st.secrets
+            creds_dict = dict(st.secrets.get("google_credentials", {}))
         if not creds_dict:
             return None
         creds = Credentials.from_service_account_info(
@@ -544,14 +552,17 @@ def _get_gsheet_client():
 
 
 def _history_sheet():
+    """回傳歷史紀錄工作表；失敗回傳 None。"""
+    import os
     client = _get_gsheet_client()
     if client is None:
         return None
     try:
-        sid = st.secrets.get("HISTORY_SHEET_ID", "")
+        # 優先讀環境變數，備用 st.secrets
+        sid = os.environ.get("HISTORY_SHEET_ID", "") or str(st.secrets.get("HISTORY_SHEET_ID", ""))
         if not sid:
             return None
-        ss = client.open_by_key(str(sid))
+        ss = client.open_by_key(sid)
         try:
             return ss.worksheet("歷史紀錄")
         except Exception:
