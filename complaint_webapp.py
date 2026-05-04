@@ -528,25 +528,32 @@ def analyze_dataframe(df: pd.DataFrame, cfg: AnalysisConfig) -> pd.DataFrame:
 
 def _get_gsheet_client():
     """從環境變數或 st.secrets 取得 gspread client。"""
-    if gspread is None or Credentials is None:
+    try:
+        import gspread as _gs
+        from google.oauth2.service_account import Credentials as _Creds
+    except ImportError:
         return None
     try:
         import os, json as _json
-        # ── 優先讀環境變數（Render 部署用）──
+        # ── 1. 優先讀 Render 環境變數 ──
         creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
         if creds_json:
             creds_dict = _json.loads(creds_json)
         else:
-            # 備用：本機 st.secrets
-            creds_dict = dict(st.secrets.get("google_credentials", {}))
+            # ── 2. 備用：本機 st.secrets（捕捉所有例外）──
+            try:
+                raw = st.secrets.get("google_credentials", {})
+                creds_dict = dict(raw) if raw else {}
+            except Exception:
+                creds_dict = {}
         if not creds_dict:
             return None
-        creds = Credentials.from_service_account_info(
+        creds = _Creds.from_service_account_info(
             creds_dict,
             scopes=["https://spreadsheets.google.com/feeds",
                     "https://www.googleapis.com/auth/drive"],
         )
-        return gspread.authorize(creds)
+        return _gs.authorize(creds)
     except Exception:
         return None
 
@@ -558,8 +565,14 @@ def _history_sheet():
     if client is None:
         return None
     try:
-        # 優先讀環境變數，備用 st.secrets
-        sid = os.environ.get("HISTORY_SHEET_ID", "") or str(st.secrets.get("HISTORY_SHEET_ID", ""))
+        # ── 1. 優先讀 Render 環境變數 ──
+        sid = os.environ.get("HISTORY_SHEET_ID", "").strip()
+        if not sid:
+            # ── 2. 備用：st.secrets ──
+            try:
+                sid = str(st.secrets.get("HISTORY_SHEET_ID", "")).strip()
+            except Exception:
+                sid = ""
         if not sid:
             return None
         ss = client.open_by_key(sid)
@@ -961,12 +974,17 @@ def build_chart_pack(df: pd.DataFrame,
     fig2.tight_layout()
     b2 = io.BytesIO(); fig2.savefig(b2, format="png", dpi=180); plt.close(fig2)
 
-    # 3) 十大細項橫條圖
+    # 3) 十大細項橫條圖  ── 強制品牌主藍 #060E9F，整數刻度
     fig3, ax3 = plt.subplots(figsize=(8, 4.5))
-    ax3.barh(d["問題細項"], d["件數"], color=_hbar_color)
+    _hbar = _hbar_color if _hbar_color else "#060E9F"
+    ax3.barh(d["問題細項"], d["件數"], color=_hbar)
     ax3.set_title("十大問題細項分布")
     ax3.set_xlabel("件數")
-    ax3.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    # 強制整數刻度（件數必為整數）
+    from matplotlib.ticker import MultipleLocator
+    ax3.xaxis.set_major_locator(MultipleLocator(1))
+    ax3.xaxis.set_minor_locator(MultipleLocator(1))
+    ax3.set_xlim(left=0)
     fig3.tight_layout()
     b3 = io.BytesIO(); fig3.savefig(b3, format="png", dpi=180); plt.close(fig3)
 
@@ -978,7 +996,7 @@ def build_chart_pack(df: pd.DataFrame,
     a3 = fig4.add_subplot(gs[0, 2])
     a1.bar(stats["問題類型"], stats["件數"], color=bc)
     a1.set_title("問題類型分布")
-    a1.yaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    a1.yaxis.set_major_locator(MultipleLocator(1))
     a1.tick_params(axis="x", rotation=18)
     if pie_counts is None:
         a2.text(0.5, 0.5, "無機台資料", ha="center", va="center", transform=a2.transAxes)
@@ -987,8 +1005,9 @@ def build_chart_pack(df: pd.DataFrame,
                colors=_pie_palette[:len(pie_counts)],
                wedgeprops=dict(linewidth=1.5, edgecolor="white"))
     a2.set_title("機台問題占比")
-    a3.barh(d["問題細項"], d["件數"], color=_hbar_color)
-    a3.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    a3.barh(d["問題細項"], d["件數"], color=_hbar)
+    a3.xaxis.set_major_locator(MultipleLocator(1))
+    a3.set_xlim(left=0)
     a3.set_title("十大細項")
     fig4.tight_layout()
     b4 = io.BytesIO(); fig4.savefig(b4, format="png", dpi=180); plt.close(fig4)
@@ -1985,6 +2004,19 @@ def section_2():
 
 def section_3():
     st.subheader("功能三：歷史分析紀錄")
+
+    # ── Google Sheets 連線狀態 ──
+    import os
+    has_creds = bool(os.environ.get("GOOGLE_CREDENTIALS_JSON", ""))
+    has_sid   = bool(os.environ.get("HISTORY_SHEET_ID", ""))
+    ws_test   = _history_sheet()
+    if ws_test is not None:
+        st.success("☁️ Google Sheets 已連線，歷史紀錄永久保存")
+    elif has_creds and has_sid:
+        st.warning("⚠️ 環境變數已設定但連線失敗，請確認試算表已授權給 Service Account：fen-52@stoked-coder-443500-f3.iam.gserviceaccount.com")
+    else:
+        st.info("ℹ️ 未連線 Google Sheets，歷史紀錄僅限本次瀏覽")
+
     history = load_history()
     if not history:
         st.info("尚無歷史紀錄。")
@@ -1998,36 +2030,37 @@ def section_3():
         if sn not in seen_names:
             seen_names[sn] = item
             deduped.append(item)
-        else:
-            # Keep the newer one (history is already newest-first)
-            pass
     history = deduped
 
     for item in history:
-        out_path = Path(item["output_path"])
+        out_path = Path(item.get("output_path", ""))
         cache = st.session_state.get("_history_cache", {})
-        
-        # 優先從磁碟讀取；若磁碟檔案不存在則從 session_state 快取讀取
-        if not out_path.exists() and item["id"] not in cache:
-            continue  # 磁碟與快取都找不到，略過
+        item_id = item["id"]
+
+        # 取得 excel bytes：磁碟 → session_state 快取（已由 load_history 從 Sheets 填入）
+        dl_bytes = None
+        df_hist  = None
+        if out_path.exists():
+            try:
+                dl_bytes = out_path.read_bytes()
+                df_hist  = pd.read_excel(io.BytesIO(dl_bytes))
+            except Exception:
+                dl_bytes = None
+        if dl_bytes is None and item_id in cache:
+            try:
+                dl_bytes = cache[item_id]["excel_bytes"]
+                df_hist  = pd.read_excel(io.BytesIO(dl_bytes))
+            except Exception:
+                dl_bytes = None
+
+        if dl_bytes is None:
+            continue   # 真的找不到，跳過
         
         sname = item.get('source_name', '')
         if len(sname) > 28:
             sname = sname[:14] + "..." + sname[-10:]
         label = f"{item['created_at'][:16]}  {sname}  ({item['rows']} 筆)"
         with st.expander(label):
-            # 載入 df_hist：先嘗試磁碟，再用 session_state 快取
-            try:
-                if out_path.exists():
-                    df_hist = pd.read_excel(out_path)
-                    dl_bytes = out_path.read_bytes()
-                else:
-                    dl_bytes = cache[item["id"]]["excel_bytes"]
-                    df_hist = pd.read_excel(io.BytesIO(dl_bytes))
-            except Exception as e:
-                st.error(f"無法載入歷史資料：{e}")
-                continue
-
             tab_data, tab_chart, tab_ai = st.tabs(["資料預覽", "圖表分析", "AI 重點摘要"])
             
             with tab_data:
